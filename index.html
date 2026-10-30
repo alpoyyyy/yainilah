@@ -163,12 +163,12 @@ th{color:var(--muted);font-weight:500}
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
-const KEY = 'hitung-kamera-v1';
+const KEY = 'hitung-kamera-v2';
 const PALETTE = ['#0d6b86','#c2352c','#2e8a4f','#b37605','#7a4fd0','#d0558f','#3b7dd8','#6b8e23','#e06c1f','#008b8b','#8b5a2b','#5f6b7a'];
 const DEFAULTS = {
   mode: 'demo', speed: 'normal', thr: 0.45, imgsz: 640, modelUrl: 'model/best.onnx',
-  classesDemo: 'bottle = Botol / kaleng spray\ncup = Gelas / kaleng kecil\nscissors = Gunting\nbook = Buku / manual\ncell phone = HP / handy talky',
-  classesCustom: 'rexco_25 = Rexco 25 (kaleng)\nwd40 = WD-40 (kaleng)\nlem_silikon = Lem silikon (tube)\nkardus_novax = Kardus Novax\nbotol_cairan = Botol cairan pembersih',
+  classesDemo: 'bottle = Kaleng / botol (Rexco, Gas duster, Gear oil, dll)\ncup = Gelas / kaleng kecil\nscissors = Gunting\nbook = Buku / manual\ncell phone = HP / handy talky',
+  classesCustom: '# Daftar barang dari SO LM 21 Okt. Urutan & nama kelas harus sama dengan saat training\nrexco_50 = Rexco 50\nrexco_18 = Rexco 18\ngas_duster = Gas duster\nwd40 = WD 40\nsuperlube = Superlube\nbrake_cleaner = Brake cleaner\nrust_remover = Rust remover\ngear_oil = Gear oil\nloctite_242 = Loctite 242\nloctite_572 = Loctite 572\nsolid_lubricant = Solid lubricant\nmajun_dus = Majun (dus)\nsarung_tangan_putih = Sarung tangan putih (pack)',
   history: []
 };
 let cfg;
