@@ -125,6 +125,13 @@ th{color:var(--muted);font-weight:500}
         <label>…atau pilih file model dari HP / laptop<input type="file" id="inModelFile" accept=".onnx"></label>
         <label>Ukuran input model (imgsz saat training)<input type="number" id="inImgsz" value="640" step="32" min="160"></label>
       </div>
+      <label>Kecepatan deteksi
+        <select id="selSpeed">
+          <option value="hemat">Hemat: ringan untuk HP lama (±1–2× per detik)</option>
+          <option value="normal">Normal (±3× per detik)</option>
+          <option value="cepat">Cepat: secepat mungkin (HP bagus)</option>
+        </select>
+      </label>
       <label>Ambang keyakinan: <span id="thrVal"></span><input type="range" id="inThr" min="0.15" max="0.9" step="0.05"></label>
       <div class="help">Naikkan kalau banyak salah deteksi, turunkan kalau ada barang yang terlewat.</div>
       <div class="row"><button class="btn primary" id="btnApply">Terapkan</button><span class="msg" id="setMsg"></span></div>
@@ -159,7 +166,7 @@ const $ = id => document.getElementById(id);
 const KEY = 'hitung-kamera-v1';
 const PALETTE = ['#0d6b86','#c2352c','#2e8a4f','#b37605','#7a4fd0','#d0558f','#3b7dd8','#6b8e23','#e06c1f','#008b8b','#8b5a2b','#5f6b7a'];
 const DEFAULTS = {
-  mode: 'demo', thr: 0.45, imgsz: 640, modelUrl: 'model/best.onnx',
+  mode: 'demo', speed: 'normal', thr: 0.45, imgsz: 640, modelUrl: 'model/best.onnx',
   classesDemo: 'bottle = Botol / kaleng spray\ncup = Gelas / kaleng kecil\nscissors = Gunting\nbook = Buku / manual\ncell phone = HP / handy talky',
   classesCustom: 'rexco_25 = Rexco 25 (kaleng)\nwd40 = WD-40 (kaleng)\nlem_silikon = Lem silikon (tube)\nkardus_novax = Kardus Novax\nbotol_cairan = Botol cairan pembersih',
   history: []
@@ -187,21 +194,33 @@ async function loadDetector() {
   try {
     if (cfg.mode === 'demo') {
       if (!window.cocoSsd) throw new Error('Library model demo gagal dimuat. Periksa koneksi internet.');
+      try { await tf.setBackend('webgl'); } catch (e) {}   // pakai GPU HP
+      await tf.ready();
       const m = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
+      // Gambar video diperkecil dulu sebelum dideteksi → jauh lebih ringan
+      const small = document.createElement('canvas'), sctx = small.getContext('2d');
+      const SW = 320;
       detector = {
         name: 'Model umum (demo)',
         async detect(v) {
-          const r = await m.detect(v, 60, cfg.thr);
-          return r.map(d => ({ key: d.class, score: d.score, box: d.bbox }));
+          const k = SW / v.videoWidth;
+          small.width = SW; small.height = Math.round(v.videoHeight * k);
+          sctx.drawImage(v, 0, 0, small.width, small.height);
+          const r = await m.detect(small, 40, cfg.thr);
+          return r.map(d => ({ key: d.class, score: d.score, box: d.bbox.map(x => x / k) }));
         }
       };
+      setMsg('setMsg', 'Menyiapkan model…');
+      const warm = document.createElement('canvas'); warm.width = 320; warm.height = 240;
+      await m.detect(warm);   // pemanasan supaya deteksi pertama tidak tersendat
     } else {
       if (!window.ort) throw new Error('Library ONNX gagal dimuat. Periksa koneksi internet.');
       ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/';
       let src = modelFileBuffer;
       if (!src) {
-        const res = await fetch(cfg.modelUrl);
-        if (!res.ok) throw new Error(`File model tidak ditemukan di "${cfg.modelUrl}". Taruh best.onnx di folder model/, atau pilih file model.`);
+        let res = null;
+        try { res = await fetch(cfg.modelUrl); } catch (e) {}
+        if (!res || !res.ok) throw new Error(`File model tidak ditemukan di "${cfg.modelUrl}". Taruh best.onnx di folder model/, atau pilih file model. Belum training? Pilih mode Demo dulu.`);
         src = new Uint8Array(await res.arrayBuffer());
       }
       const session = await ort.InferenceSession.create(src, { executionProviders: ['wasm'] });
@@ -278,7 +297,7 @@ async function startCam() {
   }
   try {
     stopCam();
-    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: facing, width: { ideal: 1280 }, height: { ideal: 960 } }, audio: false });
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: facing, width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30, max: 30 } }, audio: false });
     video.srcObject = stream; await video.play();
     overlay.width = video.videoWidth; overlay.height = video.videoHeight;
     $('idle').hidden = true; $('btnFlip').disabled = false; $('btnFreeze').disabled = false;
@@ -299,10 +318,12 @@ function stopCam() {
   octx.clearRect(0, 0, overlay.width, overlay.height);
 }
 let lastT = 0, fps = 0;
+const SPEED = { hemat: 700, normal: 300, cepat: 0 };   // jeda minimal antar deteksi (ms)
 async function loop() {
   if (!running) return;
-  if (!frozen && !busy && detector && video.readyState >= 2) {
-    busy = true;
+  const now = performance.now();
+  if (!frozen && !busy && !document.hidden && detector && video.readyState >= 2 && now - lastT >= (SPEED[cfg.speed] ?? 300)) {
+    busy = true; lastT = now;
     try {
       const t0 = performance.now();
       const dets = (await detector.detect(video)).filter(d => classes.some(c => c.key === d.key));
@@ -325,7 +346,7 @@ function draw(dets) {
     octx.fillStyle = c.color; octx.fillRect(x, Math.max(0, y - fs - 6), tw, fs + 6);
     octx.fillStyle = '#fff'; octx.fillText(tag, x + 4, Math.max(fs, y - 5));
   }
-  $('badge').hidden = false; $('badge').textContent = `${detector.name} · ${fps.toFixed(1)} fps`;
+  $('badge').hidden = false; $('badge').textContent = `${detector.name} · ${Math.round(1000 / Math.max(fps, 0.1))} ms/deteksi`;
 }
 function tally(dets) {
   const frame = {}; dets.forEach(d => frame[d.key] = (frame[d.key] || 0) + 1);
@@ -392,7 +413,7 @@ $('btnCsv').onclick = () => {
 // ---------- pengaturan ----------
 let modelFileBuffer = null;
 function fillSettings() {
-  $('selMode').value = cfg.mode; $('inThr').value = cfg.thr; $('thrVal').textContent = Math.round(cfg.thr * 100) + '%';
+  $('selMode').value = cfg.mode; $('selSpeed').value = cfg.speed || 'normal'; $('inThr').value = cfg.thr; $('thrVal').textContent = Math.round(cfg.thr * 100) + '%';
   $('inImgsz').value = cfg.imgsz; $('inModelUrl').value = cfg.modelUrl;
   $('inClasses').value = cfg.mode === 'demo' ? cfg.classesDemo : cfg.classesCustom;
   $('customBox').hidden = cfg.mode !== 'custom';
@@ -404,7 +425,7 @@ $('selMode').onchange = e => {
 $('inThr').oninput = e => $('thrVal').textContent = Math.round(e.target.value * 100) + '%';
 $('inModelFile').onchange = async e => { const f = e.target.files[0]; if (f) { modelFileBuffer = new Uint8Array(await f.arrayBuffer()); setMsg('setMsg', `File ${f.name} dipilih. Tekan Terapkan.`); } };
 $('btnApply').onclick = async () => {
-  cfg.thr = Number($('inThr').value); cfg.imgsz = Number($('inImgsz').value) || 640; cfg.modelUrl = $('inModelUrl').value.trim() || 'model/best.onnx';
+  cfg.speed = $('selSpeed').value; cfg.thr = Number($('inThr').value); cfg.imgsz = Number($('inImgsz').value) || 640; cfg.modelUrl = $('inModelUrl').value.trim() || 'model/best.onnx';
   if (cfg.mode === 'demo') cfg.classesDemo = $('inClasses').value; else cfg.classesCustom = $('inClasses').value;
   save(); loadClassList(); recent.length = 0; live = {}; renderCounts();
   detector = null; await loadDetector();
